@@ -7,6 +7,9 @@ library(ggplot2)
 library(h2o)
 library(data.table)
 library(slam)
+library(caret)
+library(tidytext)
+library(reshape2)
 
 ## load data 
 tweet_csv <- read_csv("tweets.csv")
@@ -137,36 +140,77 @@ test_h2o  <- h2o.assign(split_h2o[[3]], "test" )  # 15%
 
 ### data prep for modelling in caret ####
 
-text_data <- select(tweet_csv,  text)
+text_data <- tweet_csv %>% 
+  select(text, handle) %>% 
+  mutate(isTrump = handle == "realDonaldTrump") %>% 
+  select(-handle)
 
-### create text corpus and document term matrix
-text_corpus <- corpus(text_data)
+str(text_data)
+head(text_data)
+
+### create train and test set
+
+
+
+a <- createDataPartition(text_data$isTrump, p = 0.8, list=FALSE)
+train <- text_data[a,]
+test <- text_data[-a,]
+
+str(train)
+table(train$isTrump)
+
+str(test)
+table(test$isTrump)
+
+### create text corpus and document term matrix ####
+
+train_corpus <- corpus(train)
+test_corpus <- corpus(test)
+
 
 # Create a document term matrix.
-text_tdm <- edited_dfm <- dfm(text_corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
-text_tdm[1:10, 1:10]
-
-text_matrix <- as.matrix(text_tdm) ### it doesn't work very well - doesn't produce conventional matrix
-
-
-??DocumentTermMatrix
-tdm <- DocumentTermMatrix(text_corpus, list(removePunctuation = TRUE, stopwords = TRUE, stemming = TRUE, removeNumbers = TRUE))
-
-# Convert to a data.frame for training and assign a classification (factor) to each document.
-train <- as.matrix(tdm)
-
-# Convert to a data.frame for training and assign a classification (factor) to each document.
-
-a <- createDataPartition(iris$Species, p = 0.8, list=FALSE)
-training <- iris[a,]
-test <- iris[-a,]
+train_dfm <-  dfm(train_corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
+train_df <- as.data.frame(train_dfm)
+train_m <- as.matrix(train_dfm)
 
 
-train <- as.matrix(tdm)
-train <- cbind(train, c(0, 1))
-colnames(train)[ncol(train)] <- 'y'
-train <- as.data.frame(train)
-train$y <- as.factor(train$y)
+train_df$isTrump <- train$isTrump
+str(train_df)
+
+
+
+
+
+### tokenise using dplyr ####
+
+train_tokens <- train %>% 
+  tibble::rownames_to_column() %>% 
+  rename(tweet_num = rowname) %>% 
+  unnest_tokens(word, text) %>% 
+  dcast(tweet_num + isTrump ~ word, fun.aggregate = mean)
+
+train_tokens2 <- train %>% 
+  unnest_tokens(ngram, text, token = "ngrams", n = 2, n_min = 1)
+
+test_tokens <- test %>% 
+  unnest_tokens(word, text)
+
+test_tokens2 <- test %>% 
+  unnest_tokens(ngram, text, token = "ngrams", n = 2, n_min = 1)
+
+
+### train the model ####
 
 # Train using caret
-fit <- train(y ~ ., data = train, method = 'bayesglm')
+bayes_fit <- train(isTrump ~ ., data = train_df, method = 'bayesglm')
+boost_fit <- train(isTrump ~ ., data = train_df, method = 'adaboost')
+xgb_fit <- train(isTrump ~ ., data = train_df, method = 'xgbTree')
+rf_fit <- train(isTrump ~ ., data = train_df, method = 'rf')
+lr_fit <- train(isTrump ~ ., data = train_df, method='glm', family='binomial')
+
+
+?train
+
+product_review_model <- train_model(product_review_container, algorithm = "SVM")
+train_model(product_review_container, algorithm = "MAXENT")
+
