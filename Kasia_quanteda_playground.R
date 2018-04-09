@@ -10,6 +10,7 @@ library(slam)
 library(caret)
 library(tidytext)
 library(reshape2)
+library(e1071)
 
 ## load data 
 tweet_csv <- read_csv("tweets.csv")
@@ -142,7 +143,7 @@ test_h2o  <- h2o.assign(split_h2o[[3]], "test" )  # 15%
 
 text_data <- tweet_csv %>% 
   select(text, handle) %>% 
-  mutate(isTrump = handle == "realDonaldTrump") %>% 
+  mutate(isTrump = as.factor(ifelse(handle == "realDonaldTrump", "yes", "no"))) %>% 
   select(-handle)
 
 str(text_data)
@@ -150,7 +151,7 @@ head(text_data)
 
 ### create train and test set
 
-
+set.seed(1)
 
 a <- createDataPartition(text_data$isTrump, p = 0.8, list=FALSE)
 train <- text_data[a,]
@@ -171,7 +172,7 @@ test_corpus <- corpus(test)
 # Create a document term matrix.
 train_dfm <-  dfm(train_corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
 train_df <- as.data.frame(train_dfm)
-train_m <- as.matrix(train_dfm)
+#train_m <- as.matrix(train_dfm)
 
 
 train_df$isTrump <- train$isTrump
@@ -201,7 +202,7 @@ test_tokens2 <- test %>%
 
 ### train the model ####
 
-# Train using caret
+# Train using caret  - SUPER SLOW ####
 bayes_fit <- train(isTrump ~ ., data = train_df, method = 'bayesglm')
 boost_fit <- train(isTrump ~ ., data = train_df, method = 'adaboost')
 xgb_fit <- train(isTrump ~ ., data = train_df, method = 'xgbTree')
@@ -209,8 +210,124 @@ rf_fit <- train(isTrump ~ ., data = train_df, method = 'rf')
 lr_fit <- train(isTrump ~ ., data = train_df, method='glm', family='binomial')
 
 
-?train
+### Train using generic pkgs   - SUPER SLOW ####
+
+lr_fit <- glm(isTrump ~ ., data = train_df, family='binomial')
+summary(lr_fit)
+head(train_df)
 
 product_review_model <- train_model(product_review_container, algorithm = "SVM")
 train_model(product_review_container, algorithm = "MAXENT")
 
+
+
+### train using text2vec DTM ####
+
+library(text2vec) 
+library(qdapRegex)
+
+all_tweets <- tweet_csv %>% 
+  rename(author = handle) %>% 
+  select(author, text) %>% 
+  mutate(text = qdapRegex::rm_url(text)) %>% #removes URLs from text
+  na.omit()
+
+
+set.seed(1234)
+trainIndex <- createDataPartition(all_tweets$author, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+
+train_tweets <- all_tweets[ trainIndex,]
+test_tweets <- all_tweets[ -trainIndex,]
+
+get_matrix <- function(text) {
+  it <- itoken(text, progressbar = TRUE)
+  create_dtm(it, vectorizer = hash_vectorizer())
+}
+
+dtm_train <- get_matrix(train_tweets$text)
+dtm_test <- get_matrix(test_tweets$text)
+train_labels <- train_tweets$author == "realDonaldTrump"
+
+
+####  xgboost
+
+library(xgboost) 
+
+param <- list(max_depth = 7, 
+eta = 0.1, 
+objective = "binary:logistic", 
+eval_metric = "error", 
+nthread = 1)
+
+set.seed(1234)
+xgb_model <- xgb.train(
+  param, 
+  xgb.DMatrix(dtm_train, label = train_labels),
+  nrounds = 50,
+  verbose=0
+)
+
+# We use a (standard) threshold of 0.5
+xgb_preds <- predict(xgb_model, dtm_test) > 0.5
+test_labels <- test_tweets$author == "realDonaldTrump"
+
+# Accuracy
+print(mean(xgb_preds == test_labels))
+
+
+### logistic regressin using glmnet
+
+library(glmnet)
+
+set.seed(1234)
+glm_model <- glmnet(dtm_train, train_labels, family = "binomial")
+
+# We use a (standard) threshold of 0.5
+glm_preds <- predict(glm_model, dtm_test) > 0.5
+
+# Accuracy
+print(mean(glm_preds == test_labels))
+
+
+### SVM
+library(e1071)
+library(SparseM)
+
+svm_model <- e1071::svm(dtm_train, as.numeric(train_labels), kernel='linear')
+svm_preds <- predict(svm_model, dtm_test) > 0.5
+
+#library(sparseSVM)
+#ssvm_model <- cv.sparseSVM(dtm_train, as.numeric(train_labels))
+
+# Accuracy
+print(mean(glm_preds == test_labels))
+
+library(dplyr)
+
+# select only correct predictions
+predictions_tbl = xgb_preds %>% as_tibble() %>% 
+  rename_(predict_label = names(.)[1]) %>%
+  tibble::rownames_to_column()
+
+correct_pred = test_tweets %>%
+  tibble::rownames_to_column() %>% 
+  mutate(test_label = author == "realDonaldTrump") %>%
+  left_join(predictions_tbl) %>%
+  filter(test_label == predict_label) %>% 
+  pull(text) %>% 
+  head(15) # it needs to be 5 or less, otherwise corr_explanation returns an error, why?
+
+
+### LIME ####
+detach("package:dplyr", unload=TRUE)
+
+library(lime)
+
+explainer <- lime(correct_pred, model = xgb_model, 
+                  preprocess = get_matrix)
+
+corr_explanation <- lime::explain(correct_pred, explainer, n_labels = 1, 
+                                  n_features = 6, cols = 2, verbose = 0)
+plot_features(corr_explanation)
