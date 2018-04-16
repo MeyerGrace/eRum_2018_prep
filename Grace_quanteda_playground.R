@@ -15,6 +15,7 @@ library(caret)
 library(rpart)
 options(scipen = 999)
 
+
 # Read data ####
 tweet_csv <- read_csv("tweets.csv")
 str(tweet_csv)
@@ -115,6 +116,7 @@ tweet_summary_tbl3 <- tweet_summary %>%
   summarize(no_tweets = n_distinct(Text),
             avg_words = mean(Tokens),
             avg_sentences = mean(Sentences)) 
+
 tweet_summary_tbl3 %>%
 ggplot(aes(x = hour, y = no_tweets, fill = author, colour = author)) +
   geom_line() +
@@ -127,7 +129,6 @@ my_dfm[1:10, 1:5]
 sum(my_dfm[1, ] > 0) #the first tweet goes from 27 tokens to 23 different words
 
 # top features 
-
 topfeatures(my_dfm, 20)
 
 # text cleaning
@@ -140,7 +141,7 @@ topfeatures(edited_dfm, 20)
 # getting a wordcloud
 
 set.seed(100)
-
+# we need a sample, takes too long to plot
 textplot_wordcloud(edited_dfm, min.freq = 20, random.order = FALSE,
                    rot.per = .25, 
                    colors = RColorBrewer::brewer.pal(8,"Dark2"))
@@ -148,7 +149,7 @@ textplot_wordcloud(edited_dfm, min.freq = 20, random.order = FALSE,
 
 ### getting a wordcloud by author
 ## grouping by author - see differences!!!!
-by_author_dfm <- dfm(tweet_corpus,
+by_author_dfm <- dfm(tweet_corpus, 
                      groups = "author",
                      remove = stopwords("english"), remove_punct = TRUE, remove_url = TRUE)
 
@@ -156,11 +157,12 @@ by_author_dfm[1:2,1:10]
 
 
 # wordcloud by author 
+# modify - takes too long to plot
 set.seed(100)
 ?textplot_wordcloud
 textplot_wordcloud(by_author_dfm,
                    comparison = TRUE,
-                   min.freq = 20,
+                   min.freq = 50,
                    random.order = FALSE,
                    rot.per = .25, 
                    colors = RColorBrewer::brewer.pal(8,"Dark2"))
@@ -185,10 +187,11 @@ if(secondScript){
   tweet_dfm <- dfm(tweet_corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
   tweet_dfm[1:5,1:10]
   
+  str(data.frame(tweet_dfm))
   
   all_classes <- docvars(tweet_corpus)$author
   
-  tweets_tokens <- cbind(Label = all_classes, data.frame(tweet_dfm)) %>%
+  tweets_tokens <- cbind(Label = all_classes, data.frame(select(tweet_dfm, -document))) %>%
     mutate(Label = ifelse(Label == "HillaryClinton", 1, 0)) %>%
     mutate(Label = as.factor(Label)) %>%
     select(-document)
