@@ -27,14 +27,13 @@ table(tweet_csv$handle, tweet_csv$lang)
 table(tweet_csv$handle)
 table(tweet_csv$handle, tweet_csv$is_retweet)
 table(tweet_csv$is_retweet, is.na(tweet_csv$original_author))
-table(tweet_csv$original_author) 
 
 ### data cleaning 
 tweet_data <- tweet_csv %>% 
   filter(is_retweet == "False") %>%
   select(author = handle, text, retweet_count, favorite_count, source_url, timestamp = time) %>% 
-  mutate(date = as_date(str_sub(timestamp, 1, 10))#,
-         #time = hms(str_sub(timestamp, 12, 19))
+  mutate(date = as_date(str_sub(timestamp, 1, 10)),
+         hour = hour(hms(str_sub(timestamp, 12, 19)))
   ) %>% select(-timestamp)
 
 table(tweet_data$author)
@@ -85,6 +84,7 @@ tweet_summary_tbl %>%
 
 # look by hour of the day- they both have a diurnal pattern, but DT seems to tweet later and then earlier. 
 #HC tweets many around midnight 
+if("hour" %in% names(tweet_summary)) {
 tweet_summary_tbl2 <- tweet_summary %>% 
   group_by(author, hour) %>% 
   summarize(no_tweets = n_distinct(Text),
@@ -95,8 +95,7 @@ tweet_summary_tbl2 %>%
   ggplot(aes(x = hour, y = no_tweets, fill = author, colour = author)) +
   geom_line() +
   geom_point() 
-
-
+}
 
 # create DFM
 my_dfm <- dfm(tweet_corpus)
@@ -161,7 +160,7 @@ testData <- tweets_tokens[-indexes,]
 str(trainData)
 
 #### train the model with dfm ####
-# random forest not suitale for text classification - doesn't deal well with hogh-dimensional, sparse data, SVM or naive bayes are a better start
+# random forest not suitable for text classification - doesn't deal well with high-dimensional, sparse data, SVM or naive bayes are a better start
 # http://fastml.com/classifying-text-with-bag-of-words-a-tutorial/
 # other algos take too long to train
 
@@ -278,11 +277,11 @@ print(mean(glm_preds == test_labels))
 library(dplyr)
 
 # select only correct predictions
-predictions_tbl = xgb_preds %>% as_tibble() %>% 
+predictions_tbl <- xgb_preds %>% as_tibble() %>% 
   rename_(predict_label = names(.)[1]) %>%
   tibble::rownames_to_column()
 
-correct_pred = test_tweets %>%
+correct_pred <- test_tweets %>%
   tibble::rownames_to_column() %>% 
   mutate(test_label = author == "realDonaldTrump") %>%
   left_join(predictions_tbl) %>%
