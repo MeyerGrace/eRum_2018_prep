@@ -13,6 +13,8 @@ library(stringr)
 library(lubridate)
 library(ggplot2)
 library(caret)
+library(tidytext)
+library(glmnet)
 
 
 ## load data ####
@@ -33,11 +35,132 @@ tweet_data <- tweet_csv %>%
   filter(is_retweet == "False") %>%
   select(author = handle, text, retweet_count, favorite_count, source_url, timestamp = time) %>% 
   mutate(date = as_date(str_sub(timestamp, 1, 10)),
-         hour = hour(hms(str_sub(timestamp, 12, 19)))
+         hour = hour(hms(str_sub(timestamp, 12, 19))),
+         tweet_num = row_number()
   ) %>% select(-timestamp)
+
+str(tweet_data)
+head(select(tweet_data, -c(text, source_url)))
 
 table(tweet_data$author)
 
+#### TIDYTEXT APPROACH ####
+# data exploration ####
+# who tweets more
+
+tweet_data %>% 
+  group_by(author, date) %>% 
+  summarise(tweet_num = n_distinct(text)) %>%
+  ggplot(aes(date, tweet_num, colour = author, group = author)) +
+  geom_line() +
+  theme_minimal()
+
+
+# who tweets when 
+
+tweet_data %>% 
+  group_by(author, hour) %>% 
+  summarise(tweet_num = n_distinct(text)) %>%
+  ggplot(aes(hour, tweet_num, colour = author, group = author)) +
+  geom_line() +
+  theme_minimal()
+
+
+# who writes longer tweets?
+
+sentence_data = tweet_data %>% 
+  select(tweet_num, text) %>% 
+  tidytext::unnest_tokens(sentence, text, token = "sentences")
+ 
+sentence_data[1:6, 2]  
+
+word_data = tweet_data %>% 
+  select(tweet_num, text) %>% 
+  tidytext::unnest_tokens(word, text, token = "words")
+
+sentences_count = sentence_data %>% 
+  group_by(tweet_num) %>% 
+  summarise(n_sentences = n_distinct(sentence))
+
+word_count = word_data %>% 
+  group_by(tweet_num) %>% 
+  summarise(n_words = n_distinct(word))
+
+## avg sentence   
+tweet_data %>% 
+  inner_join(sentences_count) %>% 
+  group_by(author, date) %>% 
+  summarise(avg_sentences  = mean(n_sentences)) %>% 
+  ggplot(aes(date, avg_sentences, group = author, color = author)) +
+    geom_line() +
+    theme_minimal()
+  
+
+# avg words 
+tweet_data %>% 
+  inner_join(word_count) %>% 
+  group_by(author, date) %>% 
+  summarise(avg_words = mean(n_words)) %>% 
+  ggplot(aes(date, avg_words, group = author, color = author)) +
+  geom_line() +
+  theme_minimal()
+
+### wordclouds: TO DO!!!!!
+
+#### modelling ####
+
+tweet_dtm = word_data %>% 
+  #select(tweet_num, word) %>%  
+    count(tweet_num, word, sort = TRUE) %>%
+  cast_dtm(tweet_num, word, n)
+
+tweet_dtm[1:6, 1:6]$dimnames
+
+
+indexes <- createDataPartition(tweet_data$author, times = 1,
+                               p = 0.7, list = FALSE)
+
+train_data <- tweet_data[indexes, ]
+test_data <- tweet_data[-indexes, ]
+
+str(train_data)
+str(test_data)
+
+word_dtm <- function(df){
+  df %>% 
+  select(tweet_num, text) %>% 
+    tidytext::unnest_tokens(word, text, token = "words") %>% 
+    count(tweet_num, word, sort = TRUE) %>%
+    cast_dtm(tweet_num, word, n)
+}
+
+
+train_dtm <- word_dtm(train_data)
+test_dtm <- word_dtm(test_data)
+
+
+# glmnet ####
+
+predictor <- train_dtm %>% as.matrix()
+response <- train_data$author
+test_predictor <- test_dtm %>% as.matrix()
+test_labels <- test_data$author
+
+
+set.seed(1234)
+glm_model <- glmnet(predictor, response, family = "binomial")
+glm_model2 <- cv.glmnet(predictor, response, family = "binomial", alpha = 0.9)
+
+
+glm_preds <- predict(glm_model, test_predictor) > 0.5
+glm_preds2 <- predict(glm_model2, test_predictor) > 0.5
+
+# Accuracy
+mean(glm_preds == test_labels)
+mean(glm_preds2 == test_labels)
+
+
+#### QUANTEDA APPROACH ####
 ### create text corpus and document term matrix
 tweet_corpus <- corpus(tweet_data)
 tweet_summary <- summary(tweet_corpus, n =nrow(tweet_data))
