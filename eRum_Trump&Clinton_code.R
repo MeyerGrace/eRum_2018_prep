@@ -15,7 +15,10 @@ library(ggplot2)
 library(caret)
 library(tidytext)
 library(glmnet)
+library(devtools)
+library(xgboost)
 
+devtools::install_github('juliasilge/tidytext')
 
 ## load data ####
 tweet_csv <- read_csv("tweets.csv")
@@ -76,7 +79,9 @@ sentence_data[1:6, 2]
 
 word_data = tweet_data %>% 
   select(tweet_num, text) %>% 
-  tidytext::unnest_tokens(word, text, token = "words")
+  unnest_tokens(word, text)
+
+as.data.frame(word_data[1:26, 2]) # didn't remove URL :>
 
 sentences_count = sentence_data %>% 
   group_by(tweet_num) %>% 
@@ -111,11 +116,11 @@ tweet_data %>%
 
 tweet_dtm = word_data %>% 
   #select(tweet_num, word) %>%  
-    count(tweet_num, word, sort = TRUE) %>%
+  count(tweet_num, word, sort = TRUE) %>%
   cast_dtm(tweet_num, word, n)
 
 tweet_dtm[1:6, 1:6]$dimnames
-
+tidy(tweet_dtm)
 
 indexes <- createDataPartition(tweet_data$author, times = 1,
                                p = 0.7, list = FALSE)
@@ -129,7 +134,8 @@ str(test_data)
 word_dtm <- function(df){
   df %>% 
   select(tweet_num, text) %>% 
-    tidytext::unnest_tokens(word, text, token = "words") %>% 
+    #tidytext::unnest_tokens(word, text, token = "tweets", strip_url = TRUE, strip_punct = TRUE) %>% 
+    tidytext::unnest_tokens(word, text) %>% 
     count(tweet_num, word, sort = TRUE) %>%
     cast_dtm(tweet_num, word, n)
 }
@@ -138,26 +144,75 @@ word_dtm <- function(df){
 train_dtm <- word_dtm(train_data)
 test_dtm <- word_dtm(test_data)
 
+tidy(train_dtm)
+tidy(test_dtm)
 
 # glmnet ####
 
 predictor <- train_dtm %>% as.matrix()
-response <- train_data$author
-test_predictor <- test_dtm %>% as.matrix()
-test_labels <- test_data$author
+response <- train_data$author == "realDonaldTrump"
+  
+  train_data %>% 
+  mutate(response = train_data$author == "realDonaldTrump") %>% 
+  select(tweet_num, response) %>% 
+  inner_join(train_dtm) %>% 
+  select(response)
 
+
+
+test_predictor <- test_dtm %>% as.matrix()
+test_labels <- test_data$author == "realDonaldTrump"
+
+str(test_predictor)
+str(test_labels)
 
 set.seed(1234)
 glm_model <- glmnet(predictor, response, family = "binomial")
-glm_model2 <- cv.glmnet(predictor, response, family = "binomial", alpha = 0.9)
-
 
 glm_preds <- predict(glm_model, test_predictor) > 0.5
-glm_preds2 <- predict(glm_model2, test_predictor) > 0.5
 
 # Accuracy
 mean(glm_preds == test_labels)
-mean(glm_preds2 == test_labels)
+
+
+
+
+
+## xgboost ####
+
+param <- list(max_depth = 7, 
+              eta = 0.1, 
+              objective = "binary:logistic", 
+              eval_metric = "error", 
+              nthread = 1)
+
+set.seed(1234)
+xgb_model <- xgb.train(
+  param, 
+  xgb.DMatrix(predictor, label = response),
+  nrounds = 50,
+  verbose=0
+)
+
+
+# We use a (standard) threshold of 0.5
+xgb_preds <- predict(xgb_model, test_predictor) > 0.5
+test_labels <- test_data$author == "realDonaldTrump"
+
+# Accuracy
+print(mean(xgb_preds == test_labels))
+
+
+### SVM ####
+library(e1071)
+library(SparseM)
+
+svm_model <- e1071::svm(predictor, as.numeric(response), kernel='linear')
+svm_preds <- predict(svm_model, test_predictor) > 0.5
+
+# Accuracy
+print(mean(svm_preds == test_labels))
+
 
 
 #### QUANTEDA APPROACH ####
@@ -343,7 +398,6 @@ param <- list(max_depth = 7,
               objective = "binary:logistic", 
               eval_metric = "error", 
               nthread = 1)
-?xgb.train
 
 set.seed(1234)
 xgb_model <- xgb.train(
