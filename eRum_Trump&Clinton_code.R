@@ -17,8 +17,7 @@ library(tidytext)
 library(glmnet)
 library(devtools)
 library(xgboost)
-
-devtools::install_github('juliasilge/tidytext')
+library(text2vec)
 
 ## load data ####
 tweet_csv <- read_csv("tweets.csv")
@@ -78,10 +77,8 @@ sentence_data = tweet_data %>%
 sentence_data[1:6, 2]  
 
 word_data = tweet_data %>% 
-  select(tweet_num, text) %>% 
+  select(tweet_num, author, text) %>% 
   unnest_tokens(word, text)
-
-as.data.frame(word_data[1:26, 2]) # didn't remove URL :>
 
 sentences_count = sentence_data %>% 
   group_by(tweet_num) %>% 
@@ -116,24 +113,39 @@ tweet_data %>%
 
 tweet_dtm = word_data %>% 
   #select(tweet_num, word) %>%  
-  count(tweet_num, word, sort = TRUE) %>%
+  count(tweet_num, word) %>%
   cast_dtm(tweet_num, word, n)
 
-tweet_dtm[1:6, 1:6]$dimnames
+str(tweet_dtm)
+
+tweet_dtm[[6]]
+tweet_dtm[1:6, 1:6]$dimnames # Julia, help! What's the best way of viewing tody dtm (equivalent of inspect())?
 tidy(tweet_dtm)
+tweet_dtm[[1]]
+
+
+### creating meta data 
+#meta <- data.frame(tweet_num = as.integer(dimnames(tweet_dtm)[[1]])) %>%
+##  left_join(word_data[!duplicated(word_data$tweet_num), ], by = "tweet_num") %>%
+#  mutate(response = as.numeric(author == "realDonaldTrump")) %>% 
+#  select(-author)
+
+#meta <- data.frame(id = dimnames(papers_dtm)[[1]]) %>%
+#  left_join(papers_words[!duplicated(papers_words$id), ], by = "id") %>%
+#  mutate(y = as.numeric(author == "hamilton"),
+#         train = author != "unknown")
+
 
 indexes <- createDataPartition(tweet_data$author, times = 1,
                                p = 0.7, list = FALSE)
 
+# can't partition on 'total' dtm straight away as the author is not available there
 train_data <- tweet_data[indexes, ]
 test_data <- tweet_data[-indexes, ]
 
-str(train_data)
-str(test_data)
-
 word_dtm <- function(df){
   df %>% 
-  select(tweet_num, text) %>% 
+  select(tweet_num, author, text) %>% 
     #tidytext::unnest_tokens(word, text, token = "tweets", strip_url = TRUE, strip_punct = TRUE) %>% 
     tidytext::unnest_tokens(word, text) %>% 
     count(tweet_num, word, sort = TRUE) %>%
@@ -149,27 +161,30 @@ tidy(test_dtm)
 
 # glmnet ####
 
-predictor <- train_dtm %>% as.matrix()
-response <- train_data$author == "realDonaldTrump"
-  
-  train_data %>% 
-  mutate(response = train_data$author == "realDonaldTrump") %>% 
-  select(tweet_num, response) %>% 
-  inner_join(train_dtm) %>% 
-  select(response)
+
+#dtm_train <- get_matrix(train_tweets$text)
+#dtm_test <- get_matrix(test_tweets$text)
+#train_labels <- train_tweets$author == "realDonaldTrump"
+
+create_labels = function(matrix){
+  response = data.frame(tweet_num = as.integer(attributes(matrix)$dimnames$Docs)) %>% 
+    left_join(select(tweet_data, tweet_num, author)) %>% 
+    mutate(response = as.numeric(author == "realDonaldTrump")) %>% 
+    select(response) %>% 
+    pull() }
 
 
+train_predictors  <- train_dtm %>% as.matrix()
+test_predictors <- test_dtm %>% as.matrix()
+train_labels = create_labels(train_predictors)
+test_labels = create_labels(test_dtm)
 
-test_predictor <- test_dtm %>% as.matrix()
-test_labels <- test_data$author == "realDonaldTrump"
-
-str(test_predictor)
-str(test_labels)
+str(train_predictors)
+str(train_labels)
 
 set.seed(1234)
-glm_model <- glmnet(predictor, response, family = "binomial")
-
-glm_preds <- predict(glm_model, test_predictor) > 0.5
+glm_model <- glmnet(train_predictors, train_labels, family = "binomial")
+glm_preds <- predict(glm_model, test_predictors) > 0.5 ## Julia, help! doesn't run because of wrong dimensions!
 
 # Accuracy
 mean(glm_preds == test_labels)
@@ -189,15 +204,14 @@ param <- list(max_depth = 7,
 set.seed(1234)
 xgb_model <- xgb.train(
   param, 
-  xgb.DMatrix(predictor, label = response),
+  xgb.DMatrix(train_predictors, label = train_labels),
   nrounds = 50,
   verbose=0
 )
 
 
 # We use a (standard) threshold of 0.5
-xgb_preds <- predict(xgb_model, test_predictor) > 0.5
-test_labels <- test_data$author == "realDonaldTrump"
+xgb_preds <- predict(xgb_model, test_predictors) > 0.5
 
 # Accuracy
 print(mean(xgb_preds == test_labels))
@@ -207,8 +221,8 @@ print(mean(xgb_preds == test_labels))
 library(e1071)
 library(SparseM)
 
-svm_model <- e1071::svm(predictor, as.numeric(response), kernel='linear')
-svm_preds <- predict(svm_model, test_predictor) > 0.5
+svm_model <- e1071::svm(train_predictors, as.numeric(train_labels), kernel='linear')
+svm_preds <- predict(svm_model, test_predictors) > 0.5
 
 # Accuracy
 print(mean(svm_preds == test_labels))
@@ -384,6 +398,7 @@ get_matrix <- function(text) {
   create_dtm(it, vectorizer = hash_vectorizer())
 }
 
+
 dtm_train <- get_matrix(train_tweets$text)
 dtm_test <- get_matrix(test_tweets$text)
 train_labels <- train_tweets$author == "realDonaldTrump"
@@ -464,7 +479,7 @@ correct_pred <- test_tweets %>%
   left_join(predictions_tbl) %>%
   filter(test_label == predict_label) %>% 
   pull(text) %>% 
-  head(4) # it needs to be 5 or less, otherwise corr_explanation returns an error, why?
+  head(4) # Julia, help! it needs to be 5 or less, otherwise corr_explanation returns an error, why?
 
 str(correct_pred)
 
