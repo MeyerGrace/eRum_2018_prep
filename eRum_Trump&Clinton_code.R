@@ -143,6 +143,8 @@ indexes <- createDataPartition(tweet_data$author, times = 1,
 train_data <- tweet_data[indexes, ]
 test_data <- tweet_data[-indexes, ]
 
+
+# word tokenization and dtm creation
 word_dtm <- function(df){
   df %>% 
   select(tweet_num, author, text) %>% 
@@ -166,6 +168,8 @@ tidy(test_dtm)
 #dtm_test <- get_matrix(test_tweets$text)
 #train_labels <- train_tweets$author == "realDonaldTrump"
 
+
+# extract Docs attribute from matrix to match correct labels and create labels vector for modelling 
 create_labels = function(matrix){
   response = data.frame(tweet_num = as.integer(attributes(matrix)$dimnames$Docs)) %>% 
     left_join(select(tweet_data, tweet_num, author)) %>% 
