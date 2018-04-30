@@ -34,7 +34,7 @@ table(tweet_csv$is_retweet, is.na(tweet_csv$original_author))
 
 ### data cleaning 
 tweet_data <- tweet_csv %>% 
-  filter(is_retweet == "False") %>%
+#  filter(is_retweet == "False") %>%
   select(author = handle, text, retweet_count, favorite_count, source_url, timestamp = time) %>% 
   mutate(date = as_date(str_sub(timestamp, 1, 10)),
          hour = hour(hms(str_sub(timestamp, 12, 19))),
@@ -119,7 +119,7 @@ tweet_dtm = word_data %>%
 str(tweet_dtm)
 
 tweet_dtm[[6]]
-tweet_dtm[1:6, 1:6]$dimnames # Julia, help! What's the best way of viewing tody dtm (equivalent of inspect())?
+tweet_dtm[1:6, 1:6]$dimnames # no tm::inspect() equivalent!
 tidy(tweet_dtm)
 tweet_dtm[[1]]
 
@@ -136,12 +136,6 @@ tweet_dtm[[1]]
 #         train = author != "unknown")
 
 
-indexes <- createDataPartition(tweet_data$author, times = 1,
-                               p = 0.7, list = FALSE)
-
-# can't partition on 'total' dtm straight away as the author is not available there
-train_data <- tweet_data[indexes, ]
-test_data <- tweet_data[-indexes, ]
 
 
 # word tokenization and dtm creation
@@ -155,11 +149,47 @@ word_dtm <- function(df){
 }
 
 
-train_dtm <- word_dtm(train_data)
-test_dtm <- word_dtm(test_data)
 
-tidy(train_dtm)
-tidy(test_dtm)
+word_m <- function(df){
+  df %>% 
+    select(tweet_num, author, text) %>% 
+    #tidytext::unnest_tokens(word, text, token = "tweets", strip_url = TRUE, strip_punct = TRUE) %>% 
+    tidytext::unnest_tokens(word, text) %>% 
+    count(tweet_num, word, sort = TRUE) %>%
+    cast_sparse(tweet_num, word, n)
+}
+
+
+set.seed(1)
+indexes <- createDataPartition(tweet_data$author, times = 1,
+                              p = 0.7, list = FALSE)
+
+# can't partition on 'total' dtm straight away as the author is not available there
+
+#tweet_m <- word_m(tweet_data)
+#nrow(tweet_m)
+
+#train_index <- sample(1:nrow(tweet_m), 0.8 * nrow(tweet_m))
+#test_index <- setdiff(1:nrow(tweet_m), train_index)
+
+#train_m <- tweet_m[train_data, ]
+#test_m <- word_m(test_data)
+
+train_data <- tweet_data[indexes, ]
+test_data <- tweet_data[-indexes, ]
+
+
+#set.seed(1)
+train_m <- word_m(train_data)
+test_m <- word_m(test_data)
+
+
+
+#train_dtm <- word_dtm(train_data)
+#test_dtm <- word_dtm(test_data)
+
+#tidy(train_dtm)
+#tidy(test_dtm)
 
 # glmnet ####
 
@@ -168,27 +198,39 @@ tidy(test_dtm)
 #dtm_test <- get_matrix(test_tweets$text)
 #train_labels <- train_tweets$author == "realDonaldTrump"
 
+train_m[1:6, 1:6]
+attributes(train_m)$Dimnames[[1]]
 
 # extract Docs attribute from matrix to match correct labels and create labels vector for modelling 
-create_labels = function(matrix){
-  response = data.frame(tweet_num = as.integer(attributes(matrix)$dimnames$Docs)) %>% 
-    left_join(select(tweet_data, tweet_num, author)) %>% 
-    mutate(response = as.numeric(author == "realDonaldTrump")) %>% 
-    select(response) %>% 
-    pull() }
+#create_labels = function(matrix){
+#  response = data.frame(tweet_num = as.integer(attributes(matrix)$Dimnames[[1]])) %>% 
+#    left_join(select(tweet_data, tweet_num, author)) %>% 
+#    mutate(response = as.numeric(author == "realDonaldTrump")) %>% 
+#    select(response) %>% 
+#    pull() }
 
 
-train_predictors  <- train_dtm %>% as.matrix()
-test_predictors <- test_dtm %>% as.matrix()
-train_labels = create_labels(train_predictors)
-test_labels = create_labels(test_dtm)
+#train_predictors  <- train_dtm %>% as.matrix()
+train_m
+test_m
 
-str(train_predictors)
-str(train_labels)
+#test_predictors <- test_dtm %>% as.matrix()
+#train_labels = create_labels(train_m)
+#test_labels = create_labels(test_m)
+
+#length(train_labels)
+#length(test_labels)
+
+dim(train_m)
+dim(test_m)
 
 set.seed(1234)
-glm_model <- glmnet(train_predictors, train_labels, family = "binomial")
-glm_preds <- predict(glm_model, test_predictors) > 0.5 ## Julia, help! doesn't run because of wrong dimensions!
+glm_model <- glmnet(train_m, train_data$author=="realDonaldTrump", family = "binomial")
+glm_preds <- predict(glm_model, test_m) > 0.5 ## Julia, help! doesn't run because of wrong dimensions!
+
+test_m[1:6, 1:6]
+dim(train_m)
+dim(test_m)
 
 # Accuracy
 mean(glm_preds == test_labels)
@@ -208,25 +250,27 @@ param <- list(max_depth = 7,
 set.seed(1234)
 xgb_model <- xgb.train(
   param, 
-  xgb.DMatrix(train_predictors, label = train_labels),
+  xgb.DMatrix(train_m, label = train_data$author == "realDonaldTrump"),
   nrounds = 50,
   verbose=0
 )
 
+dim(train_data)
+dim(train_m)
 
 # We use a (standard) threshold of 0.5
-xgb_preds <- predict(xgb_model, test_predictors) > 0.5
+xgb_preds <- predict(xgb_model, test_m) > 0.5
 
 # Accuracy
-print(mean(xgb_preds == test_labels))
+print(mean(xgb_preds == test_labels)) # much lower accuracy than before :/
 
 
 ### SVM ####
 library(e1071)
 library(SparseM)
 
-svm_model <- e1071::svm(train_predictors, as.numeric(train_labels), kernel='linear')
-svm_preds <- predict(svm_model, test_predictors) > 0.5
+svm_model <- e1071::svm(train_m, as.numeric(train_labels), kernel='linear')
+svm_preds <- predict(svm_model, test_m) > 0.5
 
 # Accuracy
 print(mean(svm_preds == test_labels))
