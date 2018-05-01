@@ -17,7 +17,9 @@ library(tidytext)
 library(glmnet)
 library(tm)
 library(wordcloud)
-
+library(devtools)
+library(xgboost)
+library(text2vec)
 
 ## load data ####
 tweet_csv <- read_csv("tweets.csv")
@@ -34,7 +36,7 @@ table(tweet_csv$is_retweet, is.na(tweet_csv$original_author))
 
 ### data cleaning 
 tweet_data <- tweet_csv %>% 
-  filter(is_retweet == "False") %>%
+#  filter(is_retweet == "False") %>%
   select(author = handle, text, retweet_count, favorite_count, source_url, timestamp = time) %>% 
   mutate(date = as_date(str_sub(timestamp, 1, 10)),
          hour = hour(hms(str_sub(timestamp, 12, 19))),
@@ -89,9 +91,11 @@ sentence_data <- tweet_data %>%
 head(sentence_data)
 sentence_data[1:6, 2] 
 
+
 word_data <- tweet_data %>% 
   select(tweet_num, text) %>% 
   tidytext::unnest_tokens(word, text, token = "words")
+
 
 head(word_data)
 
@@ -144,7 +148,7 @@ tweet_data %>%
 
 tweet_dtm = word_data %>% 
   #select(tweet_num, word) %>%  
-    count(tweet_num, word, sort = TRUE) %>%
+  count(tweet_num, word) %>%
   cast_dtm(tweet_num, word, n)
 
 dim(tweet_dtm)
@@ -155,44 +159,158 @@ tweet_dtm[1:6, 1:6]$dimnames
 indexes <- createDataPartition(tweet_data$author, times = 1,
                                p = 0.7, list = FALSE)
 
-train_data <- tweet_data[indexes, ]
-test_data <- tweet_data[-indexes, ]
 
-str(train_data)
-str(test_data)
+### creating meta data 
+#meta <- data.frame(tweet_num = as.integer(dimnames(tweet_dtm)[[1]])) %>%
+##  left_join(word_data[!duplicated(word_data$tweet_num), ], by = "tweet_num") %>%
+#  mutate(response = as.numeric(author == "realDonaldTrump")) %>% 
+#  select(-author)
 
+#meta <- data.frame(id = dimnames(papers_dtm)[[1]]) %>%
+#  left_join(papers_words[!duplicated(papers_words$id), ], by = "id") %>%
+#  mutate(y = as.numeric(author == "hamilton"),
+#         train = author != "unknown")
+
+
+
+
+# word tokenization and dtm creation
 word_dtm <- function(df){
   df %>% 
-  select(tweet_num, text) %>% 
-    tidytext::unnest_tokens(word, text, token = "words") %>% 
+  select(tweet_num, author, text) %>% 
+    #tidytext::unnest_tokens(word, text, token = "tweets", strip_url = TRUE, strip_punct = TRUE) %>% 
+    tidytext::unnest_tokens(word, text) %>% 
     count(tweet_num, word, sort = TRUE) %>%
     cast_dtm(tweet_num, word, n)
 }
 
 
-train_dtm <- word_dtm(train_data)
-test_dtm <- word_dtm(test_data)
 
+word_m <- function(df){
+  df %>% 
+    select(tweet_num, author, text) %>% 
+    #tidytext::unnest_tokens(word, text, token = "tweets", strip_url = TRUE, strip_punct = TRUE) %>% 
+    tidytext::unnest_tokens(word, text) %>% 
+    count(tweet_num, word, sort = TRUE) %>%
+    cast_sparse(tweet_num, word, n)
+}
+
+
+set.seed(1)
+indexes <- createDataPartition(tweet_data$author, times = 1,
+                              p = 0.7, list = FALSE)
+
+# can't partition on 'total' dtm straight away as the author is not available there
+
+#tweet_m <- word_m(tweet_data)
+#nrow(tweet_m)
+
+#train_index <- sample(1:nrow(tweet_m), 0.8 * nrow(tweet_m))
+#test_index <- setdiff(1:nrow(tweet_m), train_index)
+
+#train_m <- tweet_m[train_data, ]
+#test_m <- word_m(test_data)
+
+train_data <- tweet_data[indexes, ]
+test_data <- tweet_data[-indexes, ]
+
+
+#set.seed(1)
+train_m <- word_m(train_data)
+test_m <- word_m(test_data)
+
+
+
+#train_dtm <- word_dtm(train_data)
+#test_dtm <- word_dtm(test_data)
+
+#tidy(train_dtm)
+#tidy(test_dtm)
 
 # train a glmnet model and create predictions ####
 
-predictor <- train_dtm %>% as.matrix()
-response <- train_data$author
-test_predictor <- test_dtm %>% as.matrix()
-test_labels <- test_data$author
 
+#dtm_train <- get_matrix(train_tweets$text)
+#dtm_test <- get_matrix(test_tweets$text)
+#train_labels <- train_tweets$author == "realDonaldTrump"
+
+train_m[1:6, 1:6]
+attributes(train_m)$Dimnames[[1]]
+
+# extract Docs attribute from matrix to match correct labels and create labels vector for modelling 
+#create_labels = function(matrix){
+#  response = data.frame(tweet_num = as.integer(attributes(matrix)$Dimnames[[1]])) %>% 
+#    left_join(select(tweet_data, tweet_num, author)) %>% 
+#    mutate(response = as.numeric(author == "realDonaldTrump")) %>% 
+#    select(response) %>% 
+#    pull() }
+
+
+#train_predictors  <- train_dtm %>% as.matrix()
+train_m
+test_m
+
+#test_predictors <- test_dtm %>% as.matrix()
+#train_labels = create_labels(train_m)
+#test_labels = create_labels(test_m)
+
+#length(train_labels)
+#length(test_labels)
+
+dim(train_m)
+dim(test_m)
 
 set.seed(1234)
-glm_model <- glmnet(predictor, response, family = "binomial")
-glm_model2 <- cv.glmnet(predictor, response, family = "binomial", alpha = 0.9)
+glm_model <- glmnet(train_m, train_data$author=="realDonaldTrump", family = "binomial")
+glm_preds <- predict(glm_model, test_m) > 0.5 ## Julia, help! doesn't run because of wrong dimensions!
 
-
-glm_preds <- predict(glm_model, test_predictor) > 0.5
-glm_preds2 <- predict(glm_model2, test_predictor) > 0.5
+test_m[1:6, 1:6]
+dim(train_m)
+dim(test_m)
 
 # Accuracy
 mean(glm_preds == test_labels)
-mean(glm_preds2 == test_labels)
+
+
+
+
+
+## xgboost ####
+
+param <- list(max_depth = 7, 
+              eta = 0.1, 
+              objective = "binary:logistic", 
+              eval_metric = "error", 
+              nthread = 1)
+
+set.seed(1234)
+xgb_model <- xgb.train(
+  param, 
+  xgb.DMatrix(train_m, label = train_data$author == "realDonaldTrump"),
+  nrounds = 50,
+  verbose=0
+)
+
+dim(train_data)
+dim(train_m)
+
+# We use a (standard) threshold of 0.5
+xgb_preds <- predict(xgb_model, test_m) > 0.5
+
+# Accuracy
+print(mean(xgb_preds == test_labels)) # much lower accuracy than before :/
+
+
+### SVM ####
+library(e1071)
+library(SparseM)
+
+svm_model <- e1071::svm(train_m, as.numeric(train_labels), kernel='linear')
+svm_preds <- predict(svm_model, test_m) > 0.5
+
+# Accuracy
+print(mean(svm_preds == test_labels))
+
 
 
 
@@ -364,6 +482,7 @@ get_matrix <- function(text) {
   create_dtm(it, vectorizer = hash_vectorizer())
 }
 
+
 dtm_train <- get_matrix(train_tweets$text)
 dtm_test <- get_matrix(test_tweets$text)
 train_labels <- train_tweets$author == "realDonaldTrump"
@@ -378,7 +497,6 @@ param <- list(max_depth = 7,
               objective = "binary:logistic", 
               eval_metric = "error", 
               nthread = 1)
-?xgb.train
 
 set.seed(1234)
 xgb_model <- xgb.train(
@@ -442,7 +560,7 @@ correct_pred <- test_tweets %>%
   left_join(predictions_tbl) %>%
   filter(test_label == predict_label) %>% 
   pull(text) %>% 
-  head(4) # it needs to be 5 or less, otherwise corr_explanation returns an error, why?
+  head(4) # Julia, help! it needs to be 5 or less, otherwise corr_explanation returns an error, why?
 
 str(correct_pred)
 
