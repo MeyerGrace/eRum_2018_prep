@@ -15,17 +15,19 @@ library(ggplot2)
 library(caret)
 library(tidytext)
 library(glmnet)
+library(tm)
+library(wordcloud)
 library(devtools)
 library(xgboost)
 library(text2vec)
 
 ## load data ####
 tweet_csv <- read_csv("tweets.csv")
-str(tweet_csv)
+str(tweet_csv, give.attr = FALSE)
 
 ## data exploration ####
 # see original authors
-table(tweet_csv$original_author)
+sort(table(tweet_csv$original_author), decreasing = TRUE)
 table(tweet_csv$lang)
 table(tweet_csv$handle, tweet_csv$lang)
 table(tweet_csv$handle)
@@ -42,14 +44,28 @@ tweet_data <- tweet_csv %>%
   ) %>% select(-timestamp)
 
 str(tweet_data)
-head(select(tweet_data, -c(text, source_url)))
+tweet_data %>%
+  select(-c(text, source_url)) %>%
+  head()
 
 table(tweet_data$author)
 
 #### TIDYTEXT APPROACH ####
-# data exploration ####
-# who tweets more
 
+#show what tokenising is
+example_text <- tweet_data %>%
+  select(text) %>%
+  slice(1)
+
+example_text %>%
+  tidytext::unnest_tokens(sentence, text, token = "words")
+
+example_text %>%
+  tidytext::unnest_tokens(sentence, text, token = "sentences")
+
+# data exploration ####
+
+# who tweets more over time
 tweet_data %>% 
   group_by(author, date) %>% 
   summarise(tweet_num = n_distinct(text)) %>%
@@ -59,7 +75,6 @@ tweet_data %>%
 
 
 # who tweets when 
-
 tweet_data %>% 
   group_by(author, hour) %>% 
   summarise(tweet_num = n_distinct(text)) %>%
@@ -69,26 +84,34 @@ tweet_data %>%
 
 
 # who writes longer tweets?
-
-sentence_data = tweet_data %>% 
+sentence_data <- tweet_data %>% 
   select(tweet_num, text) %>% 
   tidytext::unnest_tokens(sentence, text, token = "sentences")
  
-sentence_data[1:6, 2]  
+head(sentence_data)
+sentence_data[1:6, 2] 
 
-word_data = tweet_data %>% 
-  select(tweet_num, author, text) %>% 
-  unnest_tokens(word, text)
 
-sentences_count = sentence_data %>% 
+word_data <- tweet_data %>% 
+  select(tweet_num, text) %>% 
+  tidytext::unnest_tokens(word, text, token = "words")
+
+
+head(word_data)
+
+sentences_count <- sentence_data %>% 
   group_by(tweet_num) %>% 
   summarise(n_sentences = n_distinct(sentence))
 
-word_count = word_data %>% 
+head(sentences_count)
+
+word_count <- word_data %>% 
   group_by(tweet_num) %>% 
   summarise(n_words = n_distinct(word))
 
-## avg sentence   
+head(word_count)
+
+## avg sentences per author  
 tweet_data %>% 
   inner_join(sentences_count) %>% 
   group_by(author, date) %>% 
@@ -98,7 +121,7 @@ tweet_data %>%
     theme_minimal()
   
 
-# avg words 
+# avg words per author
 tweet_data %>% 
   inner_join(word_count) %>% 
   group_by(author, date) %>% 
@@ -107,21 +130,34 @@ tweet_data %>%
   geom_line() +
   theme_minimal()
 
-### wordclouds: TO DO!!!!!
+### wordclouds
+word_data %>%
+  #anit_join(stopwords) %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 100))
 
-#### modelling ####
+tweet_data %>% 
+  inner_join(word_data) %>% 
+  group_by(author) %>% 
+  count(word) %>%
+  mutate(colorSpecify = ifelse(author == "HillaryClinton", "blue", "red")) %>%
+  with(wordcloud(word, n, max.words = 100,
+          colors = colorSpecify, ordered.colors=TRUE))
+
+#### format data for modelling ####
 
 tweet_dtm = word_data %>% 
   #select(tweet_num, word) %>%  
   count(tweet_num, word) %>%
   cast_dtm(tweet_num, word, n)
 
-str(tweet_dtm)
+dim(tweet_dtm)
+tweet_dtm[1:6, 1:6]
+tweet_dtm[1:6, 1:6]$dimnames
 
-tweet_dtm[[6]]
-tweet_dtm[1:6, 1:6]$dimnames # no tm::inspect() equivalent!
-tidy(tweet_dtm)
-tweet_dtm[[1]]
+# create train and test data sets
+indexes <- createDataPartition(tweet_data$author, times = 1,
+                               p = 0.7, list = FALSE)
 
 
 ### creating meta data 
@@ -191,7 +227,7 @@ test_m <- word_m(test_data)
 #tidy(train_dtm)
 #tidy(test_dtm)
 
-# glmnet ####
+# train a glmnet model and create predictions ####
 
 
 #dtm_train <- get_matrix(train_tweets$text)
@@ -277,8 +313,10 @@ print(mean(svm_preds == test_labels))
 
 
 
+
 #### QUANTEDA APPROACH ####
-### create text corpus and document term matrix
+### create text corpus and the summary of it 
+#(inlcudes numbers of tokens and sentences, but not acutal tokens)
 tweet_corpus <- corpus(tweet_data)
 tweet_summary <- summary(tweet_corpus, n =nrow(tweet_data))
 str(tweet_summary)
@@ -298,7 +336,7 @@ kwic(tweet_corpus, "famil*")
 ## exploratory data vis ####
 # visualize number and length of tweets 
 
-tweet_summary_tbl = tweet_summary %>% 
+tweet_summary_tbl <- tweet_summary %>% 
   group_by(author, date) %>% 
   summarize(no_tweets = n_distinct(Text),
             avg_words = mean(Tokens),
@@ -352,7 +390,9 @@ topfeatures(edited_dfm, 20)
 
 # getting a wordcloud
 set.seed(100)
-textplot_wordcloud(edited_dfm, min.freq = 40, random.order = FALSE,
+textplot_wordcloud(edited_dfm, 
+                   min.freq = 40, 
+                   random.order = FALSE, 
                    rot.per = .25, 
                    colors = RColorBrewer::brewer.pal(8,"Dark2"))
 
@@ -411,11 +451,7 @@ library(microbenchmark)
 microbenchmark(nb_model <- train(Label ~ ., data = trainData, method = 'nb'), times = 2)
 system.time({ nb_model <- train(Label ~ ., data = trainData, method = 'nb') })
 
-
-
-
 ### train using text2vec DTM ####
-
 
 library(text2vec) 
 library(qdapRegex)
@@ -510,14 +546,11 @@ svm_preds <- predict(svm_model, dtm_test) > 0.5
 print(mean(glm_preds == test_labels))
 
 
-
-### LIME on XGboost models ####
-
-
-library(dplyr)
+### LIME on glmnet model ####
 
 # select only correct predictions
-predictions_tbl <- xgb_preds %>% as_tibble() %>% 
+predictions_tbl <- glm_preds2 %>% 
+  as_tibble() %>% 
   rename_(predict_label = names(.)[1]) %>%
   tibble::rownames_to_column()
 
@@ -531,16 +564,17 @@ correct_pred <- test_tweets %>%
 
 str(correct_pred)
 
-
-
 detach("package:dplyr", unload=TRUE)
 
 library(lime)
 
-explainer <- lime(correct_pred, model = xgb_model, 
+explainer <- lime(correct_pred, 
+                  model = xgb_model, 
                   preprocess = get_matrix)
 
-corr_explanation <- lime::explain(correct_pred, explainer, n_labels = 1, 
-                                  n_features = 6, cols = 2, verbose = 0)
+corr_explanation <- lime::explain(correct_pred, 
+                                  explainer, 
+                                  n_labels = 1, n_features = 6, cols = 2, verbose = 0)
 plot_features(corr_explanation)
+
 
