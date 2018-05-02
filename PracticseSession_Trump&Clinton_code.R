@@ -37,18 +37,24 @@ table(tweet_csv$is_retweet, is.na(tweet_csv$original_author))
 ### data cleaning 
 tweet_data <- tweet_csv %>% 
   #  filter(is_retweet == "False") %>%
-  select(author = handle, text, retweet_count, favorite_count, source_url, timestamp = time) %>% 
+  select(author = handle,
+         text,
+         retweet_count,
+         favorite_count,
+         source_url,
+         timestamp = time) %>% 
   mutate(date = as_date(str_sub(timestamp, 1, 10)),
          hour = hour(hms(str_sub(timestamp, 12, 19))),
          tweet_num = row_number()
   ) %>% select(-timestamp)
 
 str(tweet_data)
+
 tweet_data %>%
   select(-c(text, source_url)) %>%
   head()
 
-table(tweet_data$author)
+#table(tweet_data$author)
 
 
 #show what tokenising is
@@ -64,7 +70,9 @@ tokens(example_text, "sentence")
 #(inlcudes numbers of tokens and sentences, but not acutal tokens)
 tweet_corpus <- corpus(tweet_data)
 tweet_summary <- summary(tweet_corpus, n =nrow(tweet_data))
+
 str(tweet_summary)
+head(tweet_summary)
 
 
 # subsetting corpus
@@ -72,10 +80,10 @@ summary(corpus_subset(tweet_corpus, date > as_date('2016-07-01')), n =nrow(tweet
 
 
 # checking context of a chosen word 
-
 kwic(tweet_corpus, "terror")
 kwic(tweet_corpus, "immigrant*")
 kwic(tweet_corpus, "famil*")
+
 
 
 ## exploratory data vis ####
@@ -250,11 +258,12 @@ correct_pred <- test_tweets %>%
 
 str(correct_pred)
 
+#library(dplyr)
 detach("package:dplyr", unload=TRUE)
 
 library(lime)
 
-explainer <- lime(correct_pred, 
+explainer <- lime(train_tweets$text, 
                   model = xgb_model, 
                   preprocess = get_matrix)
 
