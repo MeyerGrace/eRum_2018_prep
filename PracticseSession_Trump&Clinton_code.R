@@ -60,7 +60,8 @@ tweet_data %>%
 #show what tokenising is
 example_text <- tweet_data$text[1]
 
-tokens(example_text, "word")
+
+quanteda::tokens(example_text, "word")
 
 tokens(example_text, "sentence")
 
@@ -83,7 +84,7 @@ summary(corpus_subset(tweet_corpus, date > as_date('2016-07-01')), n =nrow(tweet
 kwic(tweet_corpus, "terror")
 kwic(tweet_corpus, "immigrant*")
 kwic(tweet_corpus, "famil*")
-
+kwic(tweet_corpus, "amp") #ampersands!
 
 
 ## exploratory data vis ####
@@ -133,7 +134,7 @@ my_dfm <- dfm(tweet_corpus)
 my_dfm[1:10, 1:5]
 
 # top features 
-topfeatures(my_dfm, 20)
+topfeatures(my_dfm, 50)
 
 # text cleaning
 # edit tweets - remove URLs
@@ -160,7 +161,7 @@ by_author_dfm[1:2,1:10]
 
 
 # wordcloud by author 
-set.seed(100)
+set.seed(200)
 #?textplot_wordcloud
 textplot_wordcloud(by_author_dfm,
                    comparison = TRUE,
@@ -196,8 +197,13 @@ trainIndex <- createDataPartition(all_tweets$author, p = .8,
                                   list = FALSE, 
                                   times = 1)
 
+# trainIndex <- sample(1:length(all_tweets$author), length(all_tweets$author)*0.8)
+# testIndex <- !(1:nrow(all_tweets$author) %in% trainIndex)
+
 train_tweets <- all_tweets[ trainIndex,]
 test_tweets <- all_tweets[ -trainIndex,]
+
+table(train_tweets$author)
 
 # tokenization & creating a dtm
 get_matrix <- function(text) {
@@ -263,7 +269,7 @@ detach("package:dplyr", unload=TRUE)
 
 library(lime)
 
-explainer <- lime(train_tweets$text, 
+explainer <- lime(train_tweets$text[1:4], 
                   model = xgb_model, 
                   preprocess = get_matrix)
 
