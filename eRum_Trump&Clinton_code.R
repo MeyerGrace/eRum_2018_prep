@@ -419,10 +419,91 @@ textplot_wordcloud(by_author_dfm,
 
 #### modelling ####
 
-#### separate the train and test set ####
+#### separate the train and test set - QUANTEDA way ####
 
 edited_dfm[1:10, 1:10]
 table(tweet_data$author)
+
+0.8*6444
+
+train_dfm <- edited_dfm[1: 5156, ]
+train_raw <- tweet_data[1: 5156, ]
+train_labels <- train_raw$author == "realDonaldTrump"
+table(train_raw$author)
+
+
+#### TO DO: needs to be randomised! ####
+test_dfm <- edited_dfm[5157:nrow(tweet_data), ]
+test_raw <- tweet_data[5157:nrow(tweet_data), ]
+test_labels <- test_raw$author == "realDonaldTrump"
+table(test_raw$author)
+
+
+# turn to sparse matrix 
+test_dfm[1:10, 1:10]
+??sparseMatrix
+sparseMatrix(test_dfm)
+??xgb.DMatrix
+
+# compare dimensions 
+dim(test_raw)
+test_dfm
+train_dfm
+
+### Naive Bayes model - works and it's fast!
+nb_model <- quanteda::textmodel_nb(train_dfm, train_raw$author=="realDonaldTrump")
+nb_preds <- predict(nb_model, test_dfm) #> 0.5
+
+# Accuracy
+print(mean(nb_preds$nb.predicted == test_labels))
+
+
+### XGBoost model
+
+train_dtm <- convert(train_dfm, "tm")
+train_m <- convert(train_dfm, "matrix")
+test_m <- convert(test_dfm, "matrix")
+
+dim(train_m)
+length(train_labels)
+
+param <- list(max_depth = 7, 
+              eta = 0.1, 
+              objective = "binary:logistic", 
+              eval_metric = "error", 
+              nthread = 1)
+
+set.seed(1234)
+xgb_model <- xgb.train(
+  param, 
+  xgb.DMatrix(train_m, label = train_label),
+  nrounds = 50,
+  verbose=0
+)
+
+
+# We use a (standard) threshold of 0.5
+xgb_preds <- predict(xgb_model, test_m) > 0.5
+#test_labels <- test_tweets$author == "realDonaldTrump"
+
+# Accuracy
+print(mean(xgb_preds == test_label))
+
+### penalised logistic regression
+library(glmnet)
+
+set.seed(1234)
+glm_model <- glmnet(train_dfm, train_label, family = "binomial")
+
+# We use a (standard) threshold of 0.5
+glm_preds <- predict(glm_model, test_dfm) > 0.5
+
+# Accuracy
+print(mean(glm_preds == test_label))
+
+
+
+#### separate the train and test set - CARET way ####
 
 tweets_tokens <- cbind(Label = tweet_data$author, data.frame(edited_dfm)) %>%
   mutate(Label = as.factor(ifelse(Label == "HillaryClinton", 1, 0))) %>%
