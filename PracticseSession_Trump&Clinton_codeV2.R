@@ -12,29 +12,24 @@ library(dplyr)
 library(stringr)
 library(lubridate)
 library(ggplot2)
-library(caret)
-library(tidytext)
-library(glmnet)
-library(tm)
-library(wordcloud)
-library(devtools)
 library(xgboost)
-library(text2vec)
+library(glmnet)
+#library(lime) #you will need this later
 
 ## load data ####
 tweet_csv <- read_csv("tweets.csv")
 str(tweet_csv, give.attr = FALSE)
 
-## data exploration ####
-# see original authors
+## first look data exploration ####
 sort(table(tweet_csv$original_author), decreasing = TRUE)
-table(tweet_csv$lang)
-table(tweet_csv$handle, tweet_csv$lang)
+table(tweet_csv$is_retweet, is.na(tweet_csv$original_author))
 table(tweet_csv$handle)
 table(tweet_csv$handle, tweet_csv$is_retweet)
-table(tweet_csv$is_retweet, is.na(tweet_csv$original_author))
+table(tweet_csv$lang)
+table(tweet_csv$handle, tweet_csv$lang)
 
-### data cleaning 
+
+### data cleaning ####
 tweet_data <- tweet_csv %>% 
   #  filter(is_retweet == "False") %>%
   select(author = handle,
@@ -45,40 +40,31 @@ tweet_data <- tweet_csv %>%
          timestamp = time) %>% 
   mutate(date = as_date(str_sub(timestamp, 1, 10)),
          hour = hour(hms(str_sub(timestamp, 12, 19))),
-         tweet_num = row_number()
-  ) %>% select(-timestamp)
+         tweet_num = row_number()) %>% 
+  select(-timestamp)
 
 str(tweet_data)
 
+#show the non-lengthy columns
 tweet_data %>%
   select(-c(text, source_url)) %>%
   head()
 
-#table(tweet_data$author)
+### data formatting ####
 
-
-#show what tokenising is
+### show what tokenising is
 example_text <- tweet_data$text[1]
-
 
 quanteda::tokens(example_text, "word")
 
 tokens(example_text, "sentence")
 
 
-#### QUANTEDA APPROACH ####
-### create text corpus and the summary of it 
-#(inlcudes numbers of tokens and sentences, but not acutal tokens)
+### create text corpus
 tweet_corpus <- corpus(tweet_data)
-tweet_summary <- summary(tweet_corpus, n =nrow(tweet_data))
 
-str(tweet_summary)
-head(tweet_summary)
-
-
-# subsetting corpus
+# example: corpus object is easy to subset in order to get partial data
 summary(corpus_subset(tweet_corpus, date > as_date('2016-07-01')), n =nrow(tweet_data))
-
 
 # checking context of a chosen word 
 kwic(tweet_corpus, "terror")
@@ -89,6 +75,13 @@ kwic(tweet_corpus, "amp") #ampersands!
 
 ## exploratory data vis ####
 # visualize number and length of tweets 
+
+#summary of quanteda corpus includes numbers of tokens and sentences, but not acutal tokens
+#we can do analysis on this
+tweet_summary <- summary(tweet_corpus, n =nrow(tweet_data))
+
+str(tweet_summary)
+head(tweet_summary)
 
 tweet_summary_tbl <- tweet_summary %>% 
   group_by(author, date) %>% 
@@ -114,20 +107,21 @@ tweet_summary_tbl %>%
   geom_point() 
 
 
-# look by hour of the day- they both have a diurnal pattern, but DT seems to tweet later and then earlier. 
-#HC tweets many around midnight 
-if("hour" %in% names(tweet_summary)) {
-  tweet_summary_tbl2 <- tweet_summary %>% 
-    group_by(author, hour) %>% 
-    summarize(no_tweets = n_distinct(Text),
-              avg_words = mean(Tokens),
-              avg_sentences = mean(Sentences)) 
-  
-  tweet_summary_tbl2 %>%
-    ggplot(aes(x = hour, y = no_tweets, fill = author, colour = author)) +
-    geom_line() +
-    geom_point() 
-}
+# look by hour of the day- they both have a diurnal pattern, 
+# DT seems to tweet later and then earlier & HC tweets many around midnight
+# Potential time zone issues 
+
+tweet_summary_tbl2 <- tweet_summary %>% 
+  group_by(author, hour) %>% 
+  summarize(no_tweets = n_distinct(Text),
+            avg_words = mean(Tokens),
+            avg_sentences = mean(Sentences)) 
+
+tweet_summary_tbl2 %>%
+  ggplot(aes(x = hour, y = no_tweets, fill = author, colour = author)) +
+  geom_line() +
+  geom_point() 
+
 
 # create DFM
 my_dfm <- dfm(tweet_corpus)
@@ -142,7 +136,7 @@ edited_dfm <- dfm(tweet_corpus, remove_url = TRUE, remove_punct = TRUE, remove =
 topfeatures(edited_dfm, 20)
 
 
-# getting a wordcloud
+#### creating wordclouds ####
 set.seed(100)
 textplot_wordcloud(edited_dfm, 
                    min.freq = 40, 
@@ -162,7 +156,6 @@ by_author_dfm[1:2,1:10]
 
 # wordcloud by author 
 set.seed(200)
-#?textplot_wordcloud
 textplot_wordcloud(by_author_dfm,
                    comparison = TRUE,
                    min.freq = 50,
@@ -171,96 +164,64 @@ textplot_wordcloud(by_author_dfm,
                    colors = RColorBrewer::brewer.pal(8,"Dark2"))
 
 
-#### modelling ####
+#### modelling- split train and test, model and predict ####
 
 #### separate the train and test set ####
 
-### train using text2vec DTM ####
-
-library(text2vec) 
-library(qdapRegex)
-
-str(tweet_csv)
-
-all_tweets <- tweet_csv %>% 
-  filter(str_to_lower(is_retweet) == "false") %>% 
-  rename(author = handle) %>% 
-  select(author, text) %>% 
-  mutate(text = qdapRegex::rm_url(text)) %>% #removes URLs from text
-  na.omit()
-
-table(all_tweets$author)
-
 # splitting data into train & text
+# usually we would use caret for balanced, but it is a large package for a workshop 
 set.seed(32984)
-trainIndex <- createDataPartition(all_tweets$author, p = .8, 
-                                  list = FALSE, 
-                                  times = 1)
+trainIndex <- sample.int(n = nrow(tweet_csv), size = floor(.8*nrow(tweet_csv)), replace = F)
 
-# trainIndex <- sample(1:length(all_tweets$author), length(all_tweets$author)*0.8)
-# testIndex <- !(1:nrow(all_tweets$author) %in% trainIndex)
+train_tweets <- edited_dfm[ as.vector(trainIndex), ]
+test_tweets <- edited_dfm[ -as.vector(trainIndex), ]
 
-train_tweets <- all_tweets[ trainIndex,]
-test_tweets <- all_tweets[ -trainIndex,]
+# check that the train and test set have the same 
+all(train_tweets@Dimnames$features == test_tweets@Dimnames$features)
 
-table(train_tweets$author)
+train_author <- ifelse(tweet_csv$handle[ as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
+test_author <- ifelse(tweet_csv$handle[ -as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
 
-# tokenization & creating a dtm
-get_matrix <- function(text) {
-  it <- itoken(text, progressbar = TRUE)
-  create_dtm(it, vectorizer = hash_vectorizer())
-}
+length(train_author) == train_tweets@Dim[1]
+length(test_author) == test_tweets@Dim[1]
+
+table(train_author)
 
 
-dtm_train <- get_matrix(train_tweets$text)
-dtm_test <- get_matrix(test_tweets$text)
-train_labels <- train_tweets$author == "realDonaldTrump"
+#### train the classification model ####
 
-####  xgboost ####
-
-library(xgboost) 
-
-
-param <- list(max_depth = 7, 
-              eta = 0.1, 
-              objective = "binary:logistic", 
-              eval_metric = "error", 
-              nthread = 1)
-
+#try on glmnet
 set.seed(1234)
-xgb_model <- xgb.train(
-  param, 
-  xgb.DMatrix(dtm_train, label = train_labels),
-  nrounds = 50,
-  verbose=0
-)
+glm_model <- glmnet(train_tweets, train_author, family = "binomial")
+summary(glm_model)
 
-
-# We use a (standard) threshold of 0.5
-xgb_preds <- predict(xgb_model, dtm_test) > 0.5
-test_labels <- test_tweets$author == "realDonaldTrump"
-
+preds <- predict(glm_model, test_tweets, s = 0.01, type = "response") # what is a good value of lambda?
+preds <- ifelse(preds > 0.5, 1, 0)
 
 # Accuracy
-print(mean(xgb_preds == test_labels))
-
+mean(preds == test_author)
 
 
 ### LIME on xgBoost model ####
 
 # select only correct predictions
-predictions_tbl <- xgb_preds %>% 
-  as_tibble() %>% 
-  rename_(predict_label = names(.)[1]) %>%
+predictions_tbl <- preds %>% 
+  as.data.frame() %>% 
   tibble::rownames_to_column()
 
-correct_pred <- test_tweets %>%
-  tibble::rownames_to_column() %>% 
-  mutate(test_label = author == "realDonaldTrump") %>%
-  left_join(predictions_tbl) %>%
+names(predictions_tbl) <- c("rowname", "predict_label")
+
+predictions_tbl$test_label <- test_author
+
+correct_pred <- predictions_tbl %>%
   filter(test_label == predict_label) %>% 
-  pull(text) %>% 
-  head(4)
+  head(4) %>%
+  mutate(correct_tweet = as.numeric(gsub("text", "", rowname)))
+
+correct_pred$text <- tweet_data$text[correct_pred$correct_tweet]
+
+correct_pred <- correct_pred %>%
+  select(text)
 
 str(correct_pred)
 
@@ -269,9 +230,10 @@ detach("package:dplyr", unload=TRUE)
 
 library(lime)
 
-explainer <- lime(train_tweets$text[1:4], 
-                  model = xgb_model, 
-                  preprocess = get_matrix)
+#THIS IS NOT WORKING NOW BECAUSE I DIDN'T DO IT THROUGH A FUNCTION
+
+explainer <- lime(train_tweets[1:4], 
+                  model = glm_model)
 
 corr_explanation <- lime::explain(correct_pred, 
                                   explainer, 
