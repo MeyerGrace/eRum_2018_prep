@@ -206,19 +206,22 @@ mean(preds == test_author)
 
 # select only correct predictions
 predictions_tbl <- preds %>% 
-  as_tibble() %>%
+  as.data.frame() %>% 
   tibble::rownames_to_column()
+
 names(predictions_tbl) <- c("rowname", "predict_label")
 
-#THIS IS NOT WORKING NOW BECAUSE I DROPPED THE TEXT. NEED TO GET FROM JOINING TO preds
-correct_pred <- test_author %>%
-  as_tibble() %>% 
-  rename(test_label = value) %>%
-  tibble::rownames_to_column() %>% 
-  left_join(predictions_tbl) %>%
+predictions_tbl$test_label <- test_author
+
+correct_pred <- predictions_tbl %>%
   filter(test_label == predict_label) %>% 
-  pull(text) %>% 
-  head(4)
+  head(4) %>%
+  mutate(correct_tweet = as.numeric(gsub("text", "", rowname)))
+
+correct_pred$text <- tweet_data$text[correct_pred$correct_tweet]
+
+correct_pred <- correct_pred %>%
+  select(text)
 
 str(correct_pred)
 
@@ -227,9 +230,10 @@ detach("package:dplyr", unload=TRUE)
 
 library(lime)
 
-explainer <- lime(train_tweets$text[1:4], 
-                  model = xgb_model, 
-                  preprocess = get_matrix)
+#THIS IS NOT WORKING NOW BECAUSE I DIDN'T DO IT THROUGH A FUNCTION
+
+explainer <- lime(train_tweets[1:4], 
+                  model = glm_model)
 
 corr_explanation <- lime::explain(correct_pred, 
                                   explainer, 
