@@ -183,6 +183,9 @@ test_raw <- tweet_data[-as.vector(trainIndex), ]
 test_label <- test_raw$author == "realDonaldTrump"
 table(test_raw$author)
 
+#### make sure that train & test sets have exactly same features
+test_dfm <- dfm_select(test_dfm, train_dfm)
+
 # check that the train and test set have the same 
 all(train_dfm@Dimnames$features == test_dfm@Dimnames$features)
 
@@ -244,7 +247,7 @@ nrow(correct_pred)/length(test_labels) # they do!
 
 tweets_to_explain <- correct_pred %>% 
   select(text) %>% 
-  head(5)
+  head(4)
 
 #library(dplyr)
 detach("package:dplyr", unload=TRUE)
@@ -260,16 +263,22 @@ model_type.textmodel_nb_fitted <- function(x, ...) {
 }
 
 
-explainer <- lime(train_raw$text,
-                  model = nb_model,
-                  preprocess = get_matrix) # all preprocessing steps need wrapping up as a function!!!
+get_matrix <- function(df){
+  corpus <- corpus(df)
+  dfm <- dfm(corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
+}
 
-corr_explanation <- lime::explain(tweets_to_explain, 
+
+explainer <- lime(train_raw[1:5], # lime returns error on different features in explainer and explanations, even if I use the same dataset in both. Raised an issue on Github and asked a question on SO
+                  model = nb_model,
+                  preprocess = get_matrix) 
+
+corr_explanation <- lime::explain(train_raw[1:5], 
                                   explainer, 
                                   n_labels = 1,
                                   n_features = 6,
                                   cols = 2,
-                                  verbose = 0) # needs specifying the type of model we're runnig
+                                  verbose = 0)
 
 plot_features(corr_explanation)
 
