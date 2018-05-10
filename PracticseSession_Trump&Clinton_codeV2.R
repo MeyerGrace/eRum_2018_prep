@@ -12,8 +12,8 @@ library(dplyr)
 library(stringr)
 library(lubridate)
 library(ggplot2)
-library(xgboost)
-library(glmnet)
+#library(xgboost)
+#library(glmnet)
 #library(lime) #you will need this later
 
 ## load data ####
@@ -173,71 +173,129 @@ textplot_wordcloud(by_author_dfm,
 set.seed(32984)
 trainIndex <- sample.int(n = nrow(tweet_csv), size = floor(.8*nrow(tweet_csv)), replace = F)
 
-train_tweets <- edited_dfm[ as.vector(trainIndex), ]
-test_tweets <- edited_dfm[ -as.vector(trainIndex), ]
+train_dfm <- edited_dfm[as.vector(trainIndex), ]
+train_raw <- tweet_data[as.vector(trainIndex), ]
+train_labels <- train_raw$author == "realDonaldTrump"
+table(train_raw$author)
+
+test_dfm <- edited_dfm[-as.vector(trainIndex), ]
+test_raw <- tweet_data[-as.vector(trainIndex), ]
+test_labels <- test_raw$author == "realDonaldTrump"
+table(test_raw$author)
+
+#### make sure that train & test sets have exactly same features
+test_dfm <- dfm_select(test_dfm, train_dfm)
 
 # check that the train and test set have the same 
-all(train_tweets@Dimnames$features == test_tweets@Dimnames$features)
+all(train_dfm@Dimnames$features == test_dfm@Dimnames$features)
 
-train_author <- ifelse(tweet_csv$handle[ as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
-test_author <- ifelse(tweet_csv$handle[ -as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
+#train_author <- ifelse(tweet_csv$handle[ as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
+#test_author <- ifelse(tweet_csv$handle[ -as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
 
-length(train_author) == train_tweets@Dim[1]
-length(test_author) == test_tweets@Dim[1]
+#length(train_author) == train_tweets@Dim[1]
+#length(test_author) == test_tweets@Dim[1]
 
-table(train_author)
+#table(train_author)
 
 
 #### train the classification model ####
 
-#try on glmnet
-set.seed(1234)
-glm_model <- glmnet(train_tweets, train_author, family = "binomial")
-summary(glm_model)
 
-preds <- predict(glm_model, test_tweets, s = 0.01, type = "response") # what is a good value of lambda?
-preds <- ifelse(preds > 0.5, 1, 0)
+### Naive Bayes model using quanteda::textmodel_nb ####
+nb_model <- quanteda::textmodel_nb(train_dfm, train_labels)
+nb_preds <- predict(nb_model, test_dfm) #> 0.5
 
 # Accuracy
-mean(preds == test_author)
+print(mean(nb_preds$nb.predicted == test_labels))
+
+
+
+# bonus: glmnet ####
+#set.seed(1234)
+#glm_model <- glmnet(train_dfm, train_label, family = "binomial")
+
+# We use a (standard) threshold of 0.5
+#glm_preds <- predict(glm_model, test_dfm) > 0.5
+
+# Accuracy
+#print(mean(glm_preds == test_label))
 
 
 ### LIME on xgBoost model ####
 
 # select only correct predictions
-predictions_tbl <- preds %>% 
-  as.data.frame() %>% 
-  tibble::rownames_to_column()
+predictions_tbl <- data.frame(predict_label = nb_preds$nb.predicted,
+                              actual_label = test_labels,
+                              tweet_name = rownames(nb_preds$posterior.prob)
+) %>%
+  mutate(tweet_num = 
+           as.integer(
+             str_trim(
+               str_replace_all(tweet_name, "text", ""))
+         )) 
 
-names(predictions_tbl) <- c("rowname", "predict_label")
-
-predictions_tbl$test_label <- test_author
 
 correct_pred <- predictions_tbl %>%
-  filter(test_label == predict_label) %>% 
-  head(4) %>%
-  mutate(correct_tweet = as.numeric(gsub("text", "", rowname)))
+  filter(actual_label == predict_label) 
 
-correct_pred$text <- tweet_data$text[correct_pred$correct_tweet]
 
-correct_pred <- correct_pred %>%
-  select(text)
-
+## check if correct tweet numbers agree with total accuracy
 str(correct_pred)
+str(train_raw)
+nrow(correct_pred)/length(test_labels) # they do!
+
+
+
+tweets_to_explain <- test_raw %>%
+  filter(tweet_num %in% correct_pred$tweet_num) %>% 
+#  select(text) %>% 
+  head(6)
 
 #library(dplyr)
 detach("package:dplyr", unload=TRUE)
 
 library(lime)
 
-#THIS IS NOT WORKING NOW BECAUSE I DIDN'T DO IT THROUGH A FUNCTION
+class(nb_model)
 
-explainer <- lime(train_tweets[1:4], 
-                  model = glm_model)
+model_type.textmodel_nb_fitted <- function(x, ...) {
+  return("classification")
+}
 
-corr_explanation <- lime::explain(correct_pred, 
+
+# have to modify the textmodel_nb_fitted so that 
+predict_model.textmodel_nb_fitted <- function(x, newdata, type, ...) {
+  X <- corpus(newdata)
+  X <- dfm_select(dfm(X), x$data$x)   
+  res <- predict(x, newdata = X, ...)
+  switch(
+    type,
+    raw = data.frame(Response = res$nb.predicted, stringsAsFactors = FALSE),
+    prob = as.data.frame(res$posterior.prob, check.names = FALSE)
+  )  
+}
+
+
+#get_matrix <- function(df){
+#  corpus <- quanteda::corpus(df)
+#  dfm <- quanteda::dfm(corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
+#}
+
+
+explainer <- lime(tweets_to_explain, # lime returns error on different features in explainer and explanations, even if I use the same dataset in both. Raised an issue on Github and asked a question on SO
+                  model = nb_model)#,
+#                  preprocess = get_matrix) 
+
+corr_explanation <- lime::explain(tweets_to_explain, 
                                   explainer, 
-                                  n_labels = 1, n_features = 6, cols = 2, verbose = 0)
+                                  n_labels = 1,
+                                  n_features = 6,
+                                  cols = 2,
+                                  verbose = 0)
+
+
+corr_explanation[1:5, 1:5]
+
 plot_features(corr_explanation)
 
 
