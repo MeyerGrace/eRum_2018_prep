@@ -173,57 +173,78 @@ textplot_wordcloud(by_author_dfm,
 set.seed(32984)
 trainIndex <- sample.int(n = nrow(tweet_csv), size = floor(.8*nrow(tweet_csv)), replace = F)
 
-train_tweets <- edited_dfm[ as.vector(trainIndex), ]
-test_tweets <- edited_dfm[ -as.vector(trainIndex), ]
+train_dfm <- edited_dfm[as.vector(trainIndex), ]
+train_raw <- tweet_data[as.vector(trainIndex), ]
+train_label <- train_raw$author == "realDonaldTrump"
+table(train_raw$author)
+
+test_dfm <- edited_dfm[-as.vector(trainIndex), ]
+test_raw <- tweet_data[-as.vector(trainIndex), ]
+test_label <- test_raw$author == "realDonaldTrump"
+table(test_raw$author)
 
 # check that the train and test set have the same 
-all(train_tweets@Dimnames$features == test_tweets@Dimnames$features)
+all(train_dfm@Dimnames$features == test_dfm@Dimnames$features)
 
-train_author <- ifelse(tweet_csv$handle[ as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
-test_author <- ifelse(tweet_csv$handle[ -as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
+#train_author <- ifelse(tweet_csv$handle[ as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
+#test_author <- ifelse(tweet_csv$handle[ -as.vector(trainIndex)] =="realDonaldTrump", 1, 0)
 
-length(train_author) == train_tweets@Dim[1]
-length(test_author) == test_tweets@Dim[1]
+#length(train_author) == train_tweets@Dim[1]
+#length(test_author) == test_tweets@Dim[1]
 
-table(train_author)
+#table(train_author)
 
 
 #### train the classification model ####
 
-#try on glmnet
-set.seed(1234)
-glm_model <- glmnet(train_tweets, train_author, family = "binomial")
-summary(glm_model)
 
-preds <- predict(glm_model, test_tweets, s = 0.01, type = "response") # what is a good value of lambda?
-preds <- ifelse(preds > 0.5, 1, 0)
+### Naive Bayes model using quanteda::textmodel_nb ####
+nb_model <- quanteda::textmodel_nb(train_dfm, train_labels)
+nb_preds <- predict(nb_model, test_dfm) #> 0.5
 
 # Accuracy
-mean(preds == test_author)
+print(mean(nb_preds$nb.predicted == test_labels))
+
+
+
+# bonus: glmnet ####
+#set.seed(1234)
+#glm_model <- glmnet(train_dfm, train_label, family = "binomial")
+
+# We use a (standard) threshold of 0.5
+#glm_preds <- predict(glm_model, test_dfm) > 0.5
+
+# Accuracy
+#print(mean(glm_preds == test_label))
 
 
 ### LIME on xgBoost model ####
 
 # select only correct predictions
-predictions_tbl <- preds %>% 
-  as.data.frame() %>% 
-  tibble::rownames_to_column()
+predictions_tbl <- data.frame(predict_label = nb_preds$nb.predicted,
+                              actual_label = test_labels,
+                              tweet_name = rownames(nb_preds$posterior.prob)
+) %>%
+  mutate(tweet_num = 
+           as.integer(
+             str_trim(
+               str_replace_all(tweet_name, "text", ""))
+         )) %>%
+  inner_join(
+    select(tweet_data, tweet_num, text)
+    )
 
-names(predictions_tbl) <- c("rowname", "predict_label")
-
-predictions_tbl$test_label <- test_author
 
 correct_pred <- predictions_tbl %>%
-  filter(test_label == predict_label) %>% 
-  head(4) %>%
-  mutate(correct_tweet = as.numeric(gsub("text", "", rowname)))
+  filter(actual_label == predict_label) 
 
-correct_pred$text <- tweet_data$text[correct_pred$correct_tweet]
-
-correct_pred <- correct_pred %>%
-  select(text)
-
+## check if correct tweet numbers agree with total accuracy
 str(correct_pred)
+nrow(correct_pred)/length(test_labels) # they do!
+
+tweets_to_explain <- correct_pred %>% 
+  select(text) %>% 
+  head(5)
 
 #library(dplyr)
 detach("package:dplyr", unload=TRUE)
@@ -232,12 +253,24 @@ library(lime)
 
 #THIS IS NOT WORKING NOW BECAUSE I DIDN'T DO IT THROUGH A FUNCTION
 
-explainer <- lime(train_tweets[1:4], 
-                  model = glm_model)
+class(nb_model)
 
-corr_explanation <- lime::explain(correct_pred, 
+model_type.textmodel_nb_fitted <- function(x, ...) {
+  return("classification")
+}
+
+
+explainer <- lime(train_raw$text,
+                  model = nb_model,
+                  preprocess = get_matrix) # all preprocessing steps need wrapping up as a function!!!
+
+corr_explanation <- lime::explain(tweets_to_explain, 
                                   explainer, 
-                                  n_labels = 1, n_features = 6, cols = 2, verbose = 0)
+                                  n_labels = 1,
+                                  n_features = 6,
+                                  cols = 2,
+                                  verbose = 0) # needs specifying the type of model we're runnig
+
 plot_features(corr_explanation)
 
 
