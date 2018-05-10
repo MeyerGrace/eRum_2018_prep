@@ -12,8 +12,8 @@ library(dplyr)
 library(stringr)
 library(lubridate)
 library(ggplot2)
-library(xgboost)
-library(glmnet)
+#library(xgboost)
+#library(glmnet)
 #library(lime) #you will need this later
 
 ## load data ####
@@ -175,12 +175,12 @@ trainIndex <- sample.int(n = nrow(tweet_csv), size = floor(.8*nrow(tweet_csv)), 
 
 train_dfm <- edited_dfm[as.vector(trainIndex), ]
 train_raw <- tweet_data[as.vector(trainIndex), ]
-train_label <- train_raw$author == "realDonaldTrump"
+train_labels <- train_raw$author == "realDonaldTrump"
 table(train_raw$author)
 
 test_dfm <- edited_dfm[-as.vector(trainIndex), ]
 test_raw <- tweet_data[-as.vector(trainIndex), ]
-test_label <- test_raw$author == "realDonaldTrump"
+test_labels <- test_raw$author == "realDonaldTrump"
 table(test_raw$author)
 
 #### make sure that train & test sets have exactly same features
@@ -264,16 +264,18 @@ model_type.textmodel_nb_fitted <- function(x, ...) {
 
 
 get_matrix <- function(df){
-  corpus <- corpus(df)
-  dfm <- dfm(corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
+  require(quanteda)
+  
+  corpus <- quanteda::corpus(df)
+  dfm <- quanteda::dfm(corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
 }
 
 
-explainer <- lime(train_raw[1:5], # lime returns error on different features in explainer and explanations, even if I use the same dataset in both. Raised an issue on Github and asked a question on SO
+explainer <- lime(train_raw$text[1:5], # lime returns error on different features in explainer and explanations, even if I use the same dataset in both. Raised an issue on Github and asked a question on SO
                   model = nb_model,
                   preprocess = get_matrix) 
 
-corr_explanation <- lime::explain(train_raw[1:5], 
+corr_explanation <- lime::explain(train_raw$text[1:5], 
                                   explainer, 
                                   n_labels = 1,
                                   n_features = 6,
