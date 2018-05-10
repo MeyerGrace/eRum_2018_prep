@@ -232,29 +232,29 @@ predictions_tbl <- data.frame(predict_label = nb_preds$nb.predicted,
            as.integer(
              str_trim(
                str_replace_all(tweet_name, "text", ""))
-         )) %>%
-  inner_join(
-    select(tweet_data, tweet_num, text)
-    )
+         )) 
 
 
 correct_pred <- predictions_tbl %>%
   filter(actual_label == predict_label) 
 
+
 ## check if correct tweet numbers agree with total accuracy
 str(correct_pred)
+str(train_raw)
 nrow(correct_pred)/length(test_labels) # they do!
 
-tweets_to_explain <- correct_pred %>% 
-  select(text) %>% 
-  head(4)
+
+
+tweets_to_explain <- test_raw %>%
+  filter(tweet_num %in% correct_pred$tweet_num) %>% 
+#  select(text) %>% 
+  head(6)
 
 #library(dplyr)
 detach("package:dplyr", unload=TRUE)
 
 library(lime)
-
-#THIS IS NOT WORKING NOW BECAUSE I DIDN'T DO IT THROUGH A FUNCTION
 
 class(nb_model)
 
@@ -263,24 +263,38 @@ model_type.textmodel_nb_fitted <- function(x, ...) {
 }
 
 
-get_matrix <- function(df){
-  require(quanteda)
-  
-  corpus <- quanteda::corpus(df)
-  dfm <- quanteda::dfm(corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
+# have to modify the textmodel_nb_fitted so that 
+predict_model.textmodel_nb_fitted <- function(x, newdata, type, ...) {
+  X <- corpus(newdata)
+  X <- dfm_select(dfm(X), x$data$x)   
+  res <- predict(x, newdata = X, ...)
+  switch(
+    type,
+    raw = data.frame(Response = res$nb.predicted, stringsAsFactors = FALSE),
+    prob = as.data.frame(res$posterior.prob, check.names = FALSE)
+  )  
 }
 
 
-explainer <- lime(train_raw$text[1:5], # lime returns error on different features in explainer and explanations, even if I use the same dataset in both. Raised an issue on Github and asked a question on SO
-                  model = nb_model,
-                  preprocess = get_matrix) 
+#get_matrix <- function(df){
+#  corpus <- quanteda::corpus(df)
+#  dfm <- quanteda::dfm(corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
+#}
 
-corr_explanation <- lime::explain(train_raw$text[1:5], 
+
+explainer <- lime(tweets_to_explain, # lime returns error on different features in explainer and explanations, even if I use the same dataset in both. Raised an issue on Github and asked a question on SO
+                  model = nb_model)#,
+#                  preprocess = get_matrix) 
+
+corr_explanation <- lime::explain(tweets_to_explain, 
                                   explainer, 
                                   n_labels = 1,
                                   n_features = 6,
                                   cols = 2,
                                   verbose = 0)
+
+
+corr_explanation[1:5, 1:5]
 
 plot_features(corr_explanation)
 
