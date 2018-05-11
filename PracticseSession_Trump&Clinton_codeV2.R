@@ -61,7 +61,7 @@ tokens(example_text, "sentence")
 
 
 ### create text corpus
-tweet_corpus <- corpus(tweet_data)
+tweet_corpus <- corpus(tweet_csv$text)
 
 # example: corpus object is easy to subset in order to get partial data
 summary(corpus_subset(tweet_corpus, date > as_date('2016-07-01')), n =nrow(tweet_data))
@@ -173,15 +173,28 @@ textplot_wordcloud(by_author_dfm,
 set.seed(32984)
 trainIndex <- sample.int(n = nrow(tweet_csv), size = floor(.8*nrow(tweet_csv)), replace = F)
 
-train_dfm <- edited_dfm[as.vector(trainIndex), ]
-train_raw <- tweet_data[as.vector(trainIndex), ]
-train_labels <- train_raw$author == "realDonaldTrump"
-table(train_raw$author)
 
-test_dfm <- edited_dfm[-as.vector(trainIndex), ]
-test_raw <- tweet_data[-as.vector(trainIndex), ]
-test_labels <- test_raw$author == "realDonaldTrump"
-table(test_raw$author)
+
+get_matrix <- function(df){
+  corpus <- quanteda::corpus(df)
+  dfm <- quanteda::dfm(corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
+}
+
+
+
+train_dfm <- get_matrix(tweet_data$text[trainIndex])
+
+#train_dfm <- edited_dfm[as.vector(trainIndex), ]
+train_raw <- tweet_data[, c("text", "tweet_num")][as.vector(trainIndex), ]
+train_labels <- tweet_data$author[as.vector(trainIndex)] == "realDonaldTrump"
+table(train_labels)
+
+
+test_dfm <- get_matrix(tweet_data$text[-trainIndex])
+#test_dfm <- edited_dfm[-as.vector(trainIndex), ]
+test_raw <- tweet_data[, c("text", "tweet_num")][-as.vector(trainIndex), ]
+test_labels <- tweet_data$author[-as.vector(trainIndex)] == "realDonaldTrump"
+table(test_labels)
 
 #### make sure that train & test sets have exactly same features
 test_dfm <- dfm_select(test_dfm, train_dfm)
@@ -249,13 +262,11 @@ nrow(correct_pred)/length(test_labels) # they do!
 tweets_to_explain <- test_raw %>%
   filter(tweet_num %in% correct_pred$tweet_num) %>% 
 #  select(text) %>% 
-  head(6)
+  head(4)
 
-#library(dplyr)
-detach("package:dplyr", unload=TRUE)
 
-library(lime)
 
+### change setting of quanteda model so that it can fed into LIME 
 class(nb_model)
 
 model_type.textmodel_nb_fitted <- function(x, ...) {
@@ -264,9 +275,9 @@ model_type.textmodel_nb_fitted <- function(x, ...) {
 
 
 # have to modify the textmodel_nb_fitted so that 
+
 predict_model.textmodel_nb_fitted <- function(x, newdata, type, ...) {
-  X <- corpus(newdata)
-  X <- dfm_select(dfm(X), x$data$x)   
+  X <- dfm_select(dfm(newdata), x$data$x)   
   res <- predict(x, newdata = X, ...)
   switch(
     type,
@@ -276,17 +287,19 @@ predict_model.textmodel_nb_fitted <- function(x, newdata, type, ...) {
 }
 
 
-#get_matrix <- function(df){
-#  corpus <- quanteda::corpus(df)
-#  dfm <- quanteda::dfm(corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
-#}
+get_matrix <- function(df){
+  corpus <- quanteda::corpus(df)
+  dfm <- quanteda::dfm(corpus, remove_url = TRUE, remove_punct = TRUE, remove = stopwords("english"))
+}
 
+test <- get_matrix(head(train_raw$text))
+test[1:6, 1:6]
 
-explainer <- lime(tweets_to_explain, # lime returns error on different features in explainer and explanations, even if I use the same dataset in both. Raised an issue on Github and asked a question on SO
-                  model = nb_model)#,
-#                  preprocess = get_matrix) 
+explainer <- lime(train_raw$text, # lime returns error on different features in explainer and explanations, even if I use the same dataset in both. Raised an issue on Github and asked a question on SO
+                  model = nb_model,
+                  preprocess = get_matrix) 
 
-corr_explanation <- lime::explain(tweets_to_explain, 
+corr_explanation <- lime::explain(tweets_to_explain$text, 
                                   explainer, 
                                   n_labels = 1,
                                   n_features = 6,
