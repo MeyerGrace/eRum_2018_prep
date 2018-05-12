@@ -12,9 +12,9 @@ library(dplyr)
 library(stringr)
 library(lubridate)
 library(ggplot2)
-#library(xgboost)
-#library(glmnet)
-#library(lime) #you will need this later
+library(lime)
+#library(glmnet) #There is a glmnet model commented out below
+
 
 ## load data ####
 tweet_csv <- read_csv("tweets.csv")
@@ -61,7 +61,8 @@ tokens(example_text, "sentence")
 
 
 ### create text corpus
-tweet_corpus <- corpus(tweet_csv$text)
+#tweet_corpus <- corpus(tweet_csv$text)
+tweet_corpus <- corpus(tweet_data)
 
 # example: corpus object is easy to subset in order to get partial data
 summary(corpus_subset(tweet_corpus, date > as_date('2016-07-01')), n =nrow(tweet_data))
@@ -234,7 +235,7 @@ print(mean(nb_preds$nb.predicted == test_labels))
 #print(mean(glm_preds == test_label))
 
 
-### LIME on xgBoost model ####
+### LIME on Naive Bayes model ####
 
 # select only correct predictions
 predictions_tbl <- data.frame(predict_label = nb_preds$nb.predicted,
@@ -274,7 +275,7 @@ model_type.textmodel_nb_fitted <- function(x, ...) {
 }
 
 
-# have to modify the textmodel_nb_fitted so that 
+# have to modify the textmodel_nb_fitted so that the features are the same
 
 predict_model.textmodel_nb_fitted <- function(x, newdata, type, ...) {
   X <- dfm_select(dfm(newdata), x$data$x)   
